@@ -1,0 +1,10 @@
+{
+  "name": "AJZIO Education — Free HSC Learning Community",
+  "short_name": "AJZIO Education",
+  "description": "A free, student-powered learning community for HSC students in Bangladesh.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#10251f",
+  "theme_color": "#10251f",
+  "icons": [{ "src": "/brand.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

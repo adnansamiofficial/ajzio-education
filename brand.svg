@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="AJZIO Education logo">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="120" y2="124" gradientUnits="userSpaceOnUse"><stop stop-color="#173a31"/><stop offset="1" stop-color="#0b211c"/></linearGradient>
+    <linearGradient id="mint" x1="27" y1="27" x2="100" y2="101" gradientUnits="userSpaceOnUse"><stop stop-color="#d9f5bd"/><stop offset=".52" stop-color="#83d3ae"/><stop offset="1" stop-color="#42a991"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#020b08" flood-opacity=".45"/></filter>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="34" fill="url(#bg)"/>
+  <rect x="5" y="5" width="118" height="118" rx="33" fill="none" stroke="#8bd5ae" stroke-opacity=".24" stroke-width="1.5"/>
+  <g filter="url(#shadow)" fill="none" stroke="url(#mint)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M25 91 53 35c2.3-4.5 8.7-4.5 11 0l29 56"/>
+    <path d="M39 70h40" stroke-width="6"/>
+    <path d="M24 94c13-7 26-7 40 1 14-8 27-8 40-1" stroke-width="5"/>
+  </g>
+  <path d="M88 25l3-8 3 8 8 3-8 3-3 8-3-8-8-3z" fill="#d4f18f"/>
+  <circle cx="31" cy="30" r="3" fill="#d4f18f" opacity=".85"/>
+</svg>

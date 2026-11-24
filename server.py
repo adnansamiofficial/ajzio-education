@@ -46,26 +46,18 @@ def upload_to_cloudinary(raw_bytes: bytes, filename: str, mime: str) -> str:
     if not cloud_enabled():
         return ''
     boundary = '----AJZIOBoundary' + uuid.uuid4().hex
-    body = (
-        f'--{boundary}
-'
-        f'Content-Disposition: form-data; name="upload_preset"
-
-'
-        f'{CLOUDINARY_PRESET}
-'
-        f'--{boundary}
-'
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"
-'
-        f'Content-Type: {mime}
-
-'
-    ).encode('utf-8') + raw_bytes + f'
---{boundary}--
-'.encode('utf-8')
+    crlf = '\r\n'
+    parts = [
+        f'--{boundary}{crlf}',
+        f'Content-Disposition: form-data; name="upload_preset"{crlf}{crlf}{CLOUDINARY_PRESET}{crlf}',
+        f'--{boundary}{crlf}',
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"{crlf}',
+        f'Content-Type: {mime}{crlf}{crlf}',
+    ]
+    head = ''.join(parts).encode('utf-8')
+    tail = f'{crlf}--{boundary}--{crlf}'.encode('utf-8')
     url = f'https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/auto/upload'
-    req = Request(url, data=body, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    req = Request(url, data=head + raw_bytes + tail, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
     with urlopen(req, timeout=30) as resp:
         res = json.loads(resp.read().decode('utf-8'))
         return res.get('secure_url', '')
@@ -120,6 +112,7 @@ def backup_db_to_firebase():
         finally:
             _SYNC_LOCK.release()
     threading.Thread(target=_worker, daemon=True).start()
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')

@@ -386,7 +386,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header('X-Permitted-Cross-Domain-Policies', 'none')
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://res.cloudinary.com; connect-src 'self' https://api.cloudinary.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
         if self.headers.get('X-Forwarded-Proto','').lower()=='https': self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
         self.send_header('Cache-Control', 'no-store' if content_type.startswith('application/json') else 'no-cache')
         if extra:
@@ -499,7 +499,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 db.execute('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)',(hashed,row['id'],exp,now_iso()))
                 secure='; Secure' if self.headers.get('X-Forwarded-Proto','').lower()=='https' else ''
                 cookies=[f'hsc_session={token}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={SESSION_DAYS*86400}',"hsc_google_state=; Path=/auth/google; HttpOnly; SameSite=Lax; Max-Age=0"]
-                self._redirect('/?google=success',cookies); return
+                backup_db_to_firebase(); self._redirect('/?google=success',cookies); return
             existing=db.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
             if existing:
                 self._redirect('/?oauth_error=email_exists',["hsc_google_state=; Path=/auth/google; HttpOnly; SameSite=Lax; Max-Age=0"]); return
@@ -507,7 +507,7 @@ class AppHandler(BaseHTTPRequestHandler):
             db.execute('INSERT INTO google_oauth_pending(token_hash,google_sub,email,display_name,expires_at) VALUES(?,?,?,?,?)',(pending_hash,sub,email,name,expires))
         secure='; Secure' if self.headers.get('X-Forwarded-Proto','').lower()=='https' else ''
         cookies=[f'hsc_google_pending={pending}; Path=/api/auth/google; HttpOnly; SameSite=Lax{secure}; Max-Age=600',"hsc_google_state=; Path=/auth/google; HttpOnly; SameSite=Lax; Max-Age=0"]
-        self._redirect('/?google=finish',cookies)
+        backup_db_to_firebase(); self._redirect('/?google=finish',cookies)
 
     def do_GET(self):
         parts = self.path_parts()

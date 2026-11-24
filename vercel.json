@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "https://ajzio-education.onrender.com/api/$1" },
+    { "source": "/auth/(.*)", "destination": "https://ajzio-education.onrender.com/auth/$1" }
+  ]
+}

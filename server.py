@@ -29,6 +29,98 @@ AUTH_LOCK = threading.Lock()
 SUBJECTS = ['Physics', 'Chemistry', 'Higher Mathematics', 'Biology', 'ICT', 'Bangla', 'English', 'Accounting', 'Finance, Banking & Insurance', 'Business Organization & Management', 'Economics', 'Sociology', 'Civics & Good Governance', 'Logic', 'History']
 
 
+
+CLOUDINARY_CLOUD = os.environ.get('CLOUDINARY_CLOUD_NAME', '').strip()
+CLOUDINARY_PRESET = os.environ.get('CLOUDINARY_UPLOAD_PRESET', '').strip()
+FIREBASE_PROJECT = os.environ.get('FIREBASE_PROJECT_ID', '').strip()
+FIREBASE_API_KEY = os.environ.get('FIREBASE_API_KEY', '').strip()
+_SYNC_LOCK = threading.Lock()
+
+def cloud_enabled():
+    return bool(CLOUDINARY_CLOUD and CLOUDINARY_PRESET)
+
+def firebase_enabled():
+    return bool(FIREBASE_PROJECT and FIREBASE_API_KEY)
+
+def upload_to_cloudinary(raw_bytes: bytes, filename: str, mime: str) -> str:
+    if not cloud_enabled():
+        return ''
+    boundary = '----AJZIOBoundary' + uuid.uuid4().hex
+    body = (
+        f'--{boundary}
+'
+        f'Content-Disposition: form-data; name="upload_preset"
+
+'
+        f'{CLOUDINARY_PRESET}
+'
+        f'--{boundary}
+'
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"
+'
+        f'Content-Type: {mime}
+
+'
+    ).encode('utf-8') + raw_bytes + f'
+--{boundary}--
+'.encode('utf-8')
+    url = f'https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/auto/upload'
+    req = Request(url, data=body, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    with urlopen(req, timeout=30) as resp:
+        res = json.loads(resp.read().decode('utf-8'))
+        return res.get('secure_url', '')
+
+def restore_db_from_firebase():
+    if not firebase_enabled() or DB.exists():
+        return
+    try:
+        url = f'https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}/databases/(default)/documents/system/sqlite_backup?key={FIREBASE_API_KEY}'
+        with urlopen(url, timeout=15) as resp:
+            doc = json.loads(resp.read().decode('utf-8'))
+        fields = doc.get('fields', {})
+        chunks = int(fields.get('chunks', {}).get('integerValue', 0))
+        if chunks > 0:
+            b64_parts = []
+            for i in range(chunks):
+                c_url = f'https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}/databases/(default)/documents/system/sqlite_chunk_{i}?key={FIREBASE_API_KEY}'
+                with urlopen(c_url, timeout=15) as c_resp:
+                    c_doc = json.loads(c_resp.read().decode('utf-8'))
+                b64_parts.append(c_doc['fields']['data']['stringValue'])
+            DATA.mkdir(parents=True, exist_ok=True)
+            DB.write_bytes(base64.b64decode(''.join(b64_parts)))
+    except Exception:
+        pass
+
+def backup_db_to_firebase():
+    if not firebase_enabled() or not DB.exists():
+        return
+    def _worker():
+        if not _SYNC_LOCK.acquire(blocking=False):
+            return
+        try:
+            tmp = DATA / 'backup_tmp.sqlite3'
+            with sqlite3.connect(DB, timeout=20) as src, sqlite3.connect(tmp) as dst:
+                src.backup(dst)
+            raw = tmp.read_bytes()
+            tmp.unlink(missing_ok=True)
+            b64 = base64.b64encode(raw).decode('ascii')
+            chunk_size = 700_000
+            parts = [b64[i:i+chunk_size] for i in range(0, len(b64), chunk_size)] or ['']
+            for idx, part in enumerate(parts):
+                c_url = f'https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}/databases/(default)/documents/system/sqlite_chunk_{idx}?key={FIREBASE_API_KEY}'
+                payload = json.dumps({'fields': {'data': {'stringValue': part}}}).encode('utf-8')
+                req = Request(c_url, data=payload, method='PATCH', headers={'Content-Type': 'application/json'})
+                urlopen(req, timeout=20).read()
+            m_url = f'https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}/databases/(default)/documents/system/sqlite_backup?key={FIREBASE_API_KEY}'
+            m_payload = json.dumps({'fields': {'chunks': {'integerValue': str(len(parts))}, 'updated_at': {'stringValue': now_iso()}}}).encode('utf-8')
+            req = Request(m_url, data=m_payload, method='PATCH', headers={'Content-Type': 'application/json'})
+            urlopen(req, timeout=20).read()
+        except Exception:
+            pass
+        finally:
+            _SYNC_LOCK.release()
+    threading.Thread(target=_worker, daemon=True).start()
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -45,6 +137,7 @@ def connect():
 
 
 def init_db():
+    restore_db_from_firebase()
     with connect() as db:
         db.executescript('''
         CREATE TABLE IF NOT EXISTS users (
@@ -308,6 +401,8 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def send_json(self, data, status=200, extra=None):
+        if self.command in ('POST', 'PATCH', 'DELETE') and 200 <= status < 300:
+            backup_db_to_firebase()
         raw = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self._headers(status, extra=extra)
         self.wfile.write(raw)
@@ -460,6 +555,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     avatar=db.execute("SELECT avatar_file FROM users WHERE member_no=? AND account_status<>'locked'",(member_no,)).fetchone()
                     if not avatar or not avatar['avatar_file']: return self.send_json({'error':'Avatar not found.'},404)
                     filename=avatar['avatar_file']
+                    if filename.startswith('http://') or filename.startswith('https://'): return self._redirect(filename)
                     if not re.fullmatch(r'[a-f0-9]{32}\.(?:png|jpg|webp)',filename): return self.send_json({'error':'Avatar not found.'},404)
                     path=(UPLOADS/filename).resolve()
                     if path.parent!=UPLOADS.resolve() or not path.is_file(): return self.send_json({'error':'Avatar not found.'},404)
@@ -619,6 +715,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not row: return self.send_json({'error':'File not found.'},404)
                     if row['status']!='approved' and (not user or (user['id']!=row['user_id'] and user['role'] not in ('moderator','admin'))):
                         return self.send_json({'error':'This file is not public.'},403)
+                    if f_id.startswith('http://') or f_id.startswith('https://'):
+                        return self._redirect(f_id)
                     path=(UPLOADS/f_id).resolve()
                     if path.parent!=UPLOADS or not path.is_file(): return self.send_json({'error':'File not found.'},404)
                     raw=path.read_bytes()
@@ -699,8 +797,12 @@ class AppHandler(BaseHTTPRequestHandler):
                         chosen=next(((ext) for mime,ext,valid in signatures if valid and header.startswith('data:'+mime+';base64')),None)
                         if not chosen: return self.send_json({'error':'Only genuine PNG, JPG or WebP images are accepted.'},400)
                         new_avatar=uuid.uuid4().hex+'.'+chosen
-                        (UPLOADS/new_avatar).write_bytes(raw)
-                        avatar_file=new_avatar
+                        cloud_url=upload_to_cloudinary(raw, new_avatar, 'image/'+chosen)
+                        if cloud_url:
+                            avatar_file=cloud_url
+                        else:
+                            (UPLOADS/new_avatar).write_bytes(raw)
+                            avatar_file=new_avatar
                         old_avatar=u.get('avatar_file')
                         if old_avatar and old_avatar!=new_avatar:
                             try: (UPLOADS/old_avatar).unlink(missing_ok=True)
@@ -945,7 +1047,10 @@ class AppHandler(BaseHTTPRequestHandler):
                         ext=allowed.get(mime)
                         valid=(mime=='application/pdf' and file_data.startswith(b'%PDF-')) or (mime=='image/jpeg' and file_data.startswith(b'\xff\xd8\xff')) or (mime=='image/png' and file_data.startswith(b'\x89PNG\r\n\x1a\n'))
                         if not ext or not valid: return self.send_json({'error':'Only valid PDF, JPG or PNG files are accepted.'},400)
-                        fid=uuid.uuid4().hex+ext; (UPLOADS/fid).write_bytes(file_data)
+                        fid=uuid.uuid4().hex+ext
+                        cloud_url=upload_to_cloudinary(file_data, Path(file_name or fid).name, mime)
+                        if cloud_url: fid=cloud_url
+                        else: (UPLOADS/fid).write_bytes(file_data)
                     nid=str(uuid.uuid4()); created=now_iso()
                     db.execute('''INSERT INTO notes(id,user_id,author_name,title,subject,paper,class_name,study_group,chapter,note_type,description,content_language,file_id,file_name,file_mime,file_size,status,created_at)
                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(nid,u['id'],u['display_name'],fields['title'].strip(),fields['subject'],fields.get('paper','').strip()[:40],fields['class_name'],fields['study_group'],fields['chapter'].strip(),fields['note_type'],fields.get('description','').strip(),fields['content_language'],fid,Path(file_name).name[:180] if file_name else None,mime if fid else None,len(file_data) if file_data else None,'pending',created))
@@ -976,7 +1081,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         allowed={'application/pdf':'.pdf','image/jpeg':'.jpg','image/png':'.png'}; ext=allowed.get(mime)
                         valid=(mime=='application/pdf' and file_data.startswith(b'%PDF-')) or (mime=='image/jpeg' and file_data.startswith(b'\xff\xd8\xff')) or (mime=='image/png' and file_data.startswith(b'\x89PNG\r\n\x1a\n'))
                         if not ext or not valid: return self.send_json({'error':'Only valid PDF, JPG or PNG files are accepted.'},400)
-                        old_to_remove=current['file_id']; new_fid=uuid.uuid4().hex+ext; (UPLOADS/new_fid).write_bytes(file_data); new_name=Path(file_name).name[:180]; new_mime=mime; new_size=len(file_data)
+                        old_to_remove=current['file_id']; new_fid=uuid.uuid4().hex+ext; _curl=upload_to_cloudinary(file_data, Path(file_name or new_fid).name, mime); (UPLOADS/new_fid).write_bytes(file_data) if not _curl else None; new_fid=_curl or new_fid; new_name=Path(file_name).name[:180]; new_mime=mime; new_size=len(file_data)
                     db.execute('''UPDATE notes SET title=?,subject=?,paper=?,chapter=?,note_type=?,description=?,content_language=?,file_id=?,file_name=?,file_mime=?,file_size=?,status='pending',reviewer_id=NULL,review_note='',reviewed_at=NULL,created_at=? WHERE id=?''',
                       (fields['title'].strip(),fields['subject'],fields.get('paper','').strip()[:40],fields['chapter'].strip(),fields['note_type'],fields.get('description','').strip(),fields['content_language'],new_fid,new_name,new_mime,new_size,now_iso(),parts[2]))
                     # A replaced file becomes unreferenced; startup cleanup removes it safely after commit.
